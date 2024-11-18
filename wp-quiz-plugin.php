@@ -313,7 +313,13 @@ function wp_quiz_plugin_add_edit_question_page() {
         $question_text = sanitize_text_field($_POST['question_text']);
         $question_type = sanitize_text_field($_POST['question_type']);
         $options = isset($_POST['options']) ? maybe_serialize(array_map('sanitize_text_field', explode(",", $_POST['options']))) : '';
-        $solution = isset($_POST['solution']) ? maybe_serialize(array_map('sanitize_text_field', explode(",", $_POST['solution']))) : '';
+
+        // Handle solution storage based on question type
+        if ($question_type === 'single_choice') {
+            $solution = isset($_POST['solution']) ? sanitize_text_field($_POST['solution']) : '';
+        } else {
+            $solution = isset($_POST['solution']) ? maybe_serialize(array_map('sanitize_text_field', explode(",", $_POST['solution']))) : '';
+        }
 
         if ($question) {
             // Update existing question
@@ -349,7 +355,7 @@ function wp_quiz_plugin_add_edit_question_page() {
     $question_text = $question ? $question->question_text : '';
     $question_type = $question ? $question->question_type : '';
     $options = $question ? maybe_unserialize($question->options) : '';
-    $solution = $question ? maybe_unserialize($question->solution) : '';
+    $solution = $question ? $question->solution : ''; // Adjusted for single-choice string
 
     ?>
     <div class="wrap">
@@ -374,8 +380,8 @@ function wp_quiz_plugin_add_edit_question_page() {
                     <td><input type="text" id="options" name="options" class="regular-text" value="<?php echo esc_attr(implode(",", (array)$options)); ?>"></td>
                 </tr>
                 <tr>
-                    <th><label for="solution">Correct Answer(s) (comma-separated)</label></th>
-                    <td><input type="text" id="solution" name="solution" class="regular-text" value="<?php echo esc_attr(implode(",", (array)$solution)); ?>"></td>
+                    <th><label for="solution">Correct Answer(s) <?php echo $question_type === 'single_choice' ? '(single)' : '(comma-separated)'; ?></label></th>
+                    <td><input type="text" id="solution" name="solution" class="regular-text" value="<?php echo esc_attr($solution); ?>"></td>
                 </tr>
             </table>
             <p class="submit">
@@ -385,3 +391,238 @@ function wp_quiz_plugin_add_edit_question_page() {
     </div>
     <?php
 }
+
+
+
+
+
+// Shortcode to display the quiz
+function wp_quiz_plugin_display_quiz($atts) {
+    global $wpdb;
+
+    // Extract shortcode attributes
+    $atts = shortcode_atts(array(
+        'id' => 0, // Default quiz ID
+    ), $atts);
+
+    $quiz_id = intval($atts['id']);
+    if (!$quiz_id) {
+        return "<p>No quiz specified. Please provide a quiz ID.</p>";
+    }
+
+    // Fetch the quiz data
+    $quizzes_table = $wpdb->prefix . 'quizzes';
+    $quiz_questions_table = $wpdb->prefix . 'quiz_questions';
+
+    $quiz = $wpdb->get_row($wpdb->prepare("SELECT * FROM $quizzes_table WHERE id = %d", $quiz_id));
+    if (!$quiz) {
+        return "<p>Quiz not found.</p>";
+    }
+
+    // Fetch questions for the quiz
+    $questions = $wpdb->get_results($wpdb->prepare("SELECT * FROM $quiz_questions_table WHERE quiz_id = %d", $quiz_id));
+    if (empty($questions)) {
+        return "<p>This quiz has no questions yet.</p>";
+    }
+
+    // Handle Form Submission
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_quiz'])) {
+        $user_id = get_current_user_id(); // Ensure the user is logged in
+        if (!$user_id) {
+            return "<p>Please log in to submit the quiz.</p>";
+        }
+
+        $quiz_user_answers_table = $wpdb->prefix . 'quiz_user_answers';
+        $score = 0;
+        $total_questions = count($questions);
+
+        foreach ($questions as $question) {
+            $user_answer = isset($_POST['answers'][$question->id]) ? $_POST['answers'][$question->id] : null;
+
+            // Serialize multiple-choice answers
+            if (is_array($user_answer)) {
+                $user_answer = maybe_serialize($user_answer);
+            }
+
+            // Check if the answer is correct
+            $correct = false;
+            $solution = maybe_unserialize($question->solution);
+
+            if ($question->question_type === 'single_choice' && $user_answer == $solution) {
+                $correct = true;
+            } elseif ($question->question_type === 'multiple_choice' && is_array($solution)) {
+                $correct = ($user_answer == maybe_serialize($solution));
+            }
+
+            if ($correct) {
+                $score++;
+            }
+
+            // Save the user's answer
+            $wpdb->insert($quiz_user_answers_table, array(
+                'quiz_id' => $quiz_id,
+                'user_id' => $user_id,
+                'question_id' => $question->id,
+                'user_answer' => $user_answer,
+                'correct' => $correct,
+                'submitted_at' => current_time('mysql'),
+            ));
+        }
+
+        // Display the user's score
+        return "<p>You scored $score out of $total_questions.</p>";
+    }
+
+
+    // Start output buffering for dynamic rendering
+    ob_start();
+    ?>
+    <div class="wp-quiz-container">
+        <h2><?php echo esc_html($quiz->title); ?></h2>
+        <p><?php echo esc_html($quiz->description); ?></p>
+        <form method="post" action="">
+            <?php foreach ($questions as $index => $question): ?>
+                <div class="quiz-question">
+                    <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
+                    <?php
+                    $options = maybe_unserialize($question->options);
+                    if ($question->question_type === 'single_choice'):
+                        ?>
+                        <?php foreach ($options as $option): ?>
+                        <label>
+                            <input type="radio" name="answers[<?php echo $question->id; ?>]" value="<?php echo esc_attr($option); ?>" required>
+                            <?php echo esc_html($option); ?>
+                        </label><br>
+                    <?php endforeach; ?>
+                    <?php elseif ($question->question_type === 'multiple_choice'): ?>
+                        <?php foreach ($options as $option): ?>
+                            <label>
+                                <input type="checkbox" name="answers[<?php echo $question->id; ?>][]" value="<?php echo esc_attr($option); ?>">
+                                <?php echo esc_html($option); ?>
+                            </label><br>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            <?php endforeach; ?>
+            <button type="button" name="submit_quiz" class="quiz-submit-button" onClick="handleClickQuizSubmission()">Submit Quiz</button>
+        </form>
+    </div>
+
+    <script>
+        function handleClickQuizSubmission(event) {
+            console.log('triggered')
+            event.preventDefault();
+
+            const form = event.target.closest('form'); // Find the closest form
+            const resultDivId = form.getAttribute('data-result-id');
+            const resultDiv = document.getElementById(resultDivId);
+
+            if (!form) {
+                console.error("Quiz form not found!");
+                return;
+            }
+
+            // Collect form data
+            const formData = new FormData(form);
+
+            // Perform AJAX request
+            fetch(ajaxurl, {
+                method: 'POST',
+                body: formData,
+            })
+                .then((response) => response.json())
+                .then((data) => {
+                    if (data.success) {
+                        resultDiv.innerHTML = `<h3>Your Score: ${data.score}/${data.total}</h3>`;
+                        resultDiv.style.display = 'block';
+                    } else {
+                        resultDiv.innerHTML = `<p>${data.message}</p>`;
+                        resultDiv.style.display = 'block';
+                    }
+                })
+                .catch((error) => {
+                    console.error('Error:', error);
+                    resultDiv.innerHTML = `<p>An error occurred. Please try again later.</p>`;
+                    resultDiv.style.display = 'block';
+                });
+
+        })
+
+    </script>
+
+    <?php
+    return ob_get_clean();
+}
+
+// Register the shortcode
+add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
+
+
+
+
+
+function wp_quiz_plugin_handle_ajax() {
+    if (!isset($_POST['quiz_id']) || !is_user_logged_in()) {
+        wp_send_json_error(['message' => 'Invalid request or not logged in.']);
+    }
+
+    global $wpdb;
+    $quiz_id = intval($_POST['quiz_id']);
+    $questions_table = $wpdb->prefix . 'quiz_questions';
+    $answers = $_POST;
+
+    unset($answers['action'], $answers['quiz_id']);
+
+    // Fetch all questions for the quiz
+    $questions = $wpdb->get_results($wpdb->prepare(
+        "SELECT id, question_type, solution FROM $questions_table WHERE quiz_id = %d",
+        $quiz_id
+    ));
+
+    if (!$questions) {
+        wp_send_json_error(['message' => 'Quiz not found.']);
+    }
+
+    $score = 0;
+    $total = count($questions);
+
+    foreach ($questions as $question) {
+        $question_id = $question->id;
+        $correct_answer = maybe_unserialize($question->solution);
+
+        if (!isset($answers["question_$question_id"])) {
+            continue; // No answer provided for this question
+        }
+
+        $user_answer = $answers["question_$question_id"];
+
+        // Check answers based on question type
+        if ($question->question_type === 'single_choice') {
+            if ($user_answer === $correct_answer) {
+                $score++;
+            }
+        } elseif ($question->question_type === 'multiple_choice') {
+            if (is_array($user_answer) && !array_diff($user_answer, $correct_answer)) {
+                $score++;
+            }
+        }
+    }
+
+    wp_send_json_success(['score' => $score, 'total' => $total]);
+}
+add_action('wp_ajax_wp_quiz_submit_answers', 'wp_quiz_plugin_handle_ajax');
+
+
+
+function wp_quiz_plugin_enqueue_scripts() {
+    wp_enqueue_script(
+        'wp-quiz-plugin',
+        plugins_url('js/wp-quiz-plugin.js', __FILE__),
+        [],
+        '1.0',
+        true
+    );
+    wp_localize_script('wp-quiz-plugin', 'ajaxurl', admin_url('admin-ajax.php'));
+}
+add_action('wp_enqueue_scripts', 'wp_quiz_plugin_enqueue_scripts');
+
