@@ -425,54 +425,8 @@ function wp_quiz_plugin_display_quiz($atts) {
         return "<p>This quiz has no questions yet.</p>";
     }
 
-    // Handle Form Submission
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_quiz'])) {
-        $user_id = get_current_user_id(); // Ensure the user is logged in
-        if (!$user_id) {
-            return "<p>Please log in to submit the quiz.</p>";
-        }
-
-        $quiz_user_answers_table = $wpdb->prefix . 'quiz_user_answers';
-        $score = 0;
-        $total_questions = count($questions);
-
-        foreach ($questions as $question) {
-            $user_answer = isset($_POST['answers'][$question->id]) ? $_POST['answers'][$question->id] : null;
-
-            // Serialize multiple-choice answers
-            if (is_array($user_answer)) {
-                $user_answer = maybe_serialize($user_answer);
-            }
-
-            // Check if the answer is correct
-            $correct = false;
-            $solution = maybe_unserialize($question->solution);
-
-            if ($question->question_type === 'single_choice' && $user_answer == $solution) {
-                $correct = true;
-            } elseif ($question->question_type === 'multiple_choice' && is_array($solution)) {
-                $correct = ($user_answer == maybe_serialize($solution));
-            }
-
-            if ($correct) {
-                $score++;
-            }
-
-            // Save the user's answer
-            $wpdb->insert($quiz_user_answers_table, array(
-                'quiz_id' => $quiz_id,
-                'user_id' => $user_id,
-                'question_id' => $question->id,
-                'user_answer' => $user_answer,
-                'correct' => $correct,
-                'submitted_at' => current_time('mysql'),
-            ));
-        }
-
-        // Display the user's score
-        return "<p>You scored $score out of $total_questions.</p>";
-    }
-
+    // Generate a unique result container ID
+    $result_div_id = 'quiz_result_' . $quiz_id;
 
     // Start output buffering for dynamic rendering
     ob_start();
@@ -480,7 +434,7 @@ function wp_quiz_plugin_display_quiz($atts) {
     <div class="wp-quiz-container">
         <h2><?php echo esc_html($quiz->title); ?></h2>
         <p><?php echo esc_html($quiz->description); ?></p>
-        <form method="post" action="">
+        <form method="post" action="" class="wp-quiz-form" data-result-id="<?php echo esc_attr($result_div_id); ?>">
             <?php foreach ($questions as $index => $question): ?>
                 <div class="quiz-question">
                     <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
@@ -504,74 +458,79 @@ function wp_quiz_plugin_display_quiz($atts) {
                     <?php endif; ?>
                 </div>
             <?php endforeach; ?>
-            <button type="button" name="submit_quiz" class="quiz-submit-button" onClick="handleClickQuizSubmission()">Submit Quiz</button>
+            <?php wp_nonce_field('wp_quiz_nonce', 'quiz_nonce'); ?>
+            <button type="submit" class="quiz-submit-button button">Submit Quiz</button>
         </form>
+        <div id="<?php echo esc_attr($result_div_id); ?>" class="quiz-result" style="display:none;"></div>
     </div>
 
     <script>
-        function handleClickQuizSubmission(event) {
-            console.log('triggered')
-            event.preventDefault();
+        document.addEventListener('DOMContentLoaded', function () {
+            const forms = document.querySelectorAll('.wp-quiz-form');
+            forms.forEach((form) => {
+                const resultDivId = form.getAttribute('data-result-id');
+                const resultDiv = document.getElementById(resultDivId);
 
-            const form = event.target.closest('form'); // Find the closest form
-            const resultDivId = form.getAttribute('data-result-id');
-            const resultDiv = document.getElementById(resultDivId);
+                form.addEventListener('submit', function (event) {
+                    event.preventDefault();
 
-            if (!form) {
-                console.error("Quiz form not found!");
-                return;
-            }
+                    // Collect form data
+                    const formData = new FormData(form);
+                    formData.append('action', 'wp_quiz_submit_answers'); // Add action for AJAX handler
+                    formData.append('quiz_id', '<?php echo $quiz_id; ?>'); // Add quiz ID
 
-            // Collect form data
-            const formData = new FormData(form);
-
-            // Perform AJAX request
-            fetch(ajaxurl, {
-                method: 'POST',
-                body: formData,
-            })
-                .then((response) => response.json())
-                .then((data) => {
-                    if (data.success) {
-                        resultDiv.innerHTML = `<h3>Your Score: ${data.score}/${data.total}</h3>`;
-                        resultDiv.style.display = 'block';
-                    } else {
-                        resultDiv.innerHTML = `<p>${data.message}</p>`;
-                        resultDiv.style.display = 'block';
-                    }
-                })
-                .catch((error) => {
-                    console.error('Error:', error);
-                    resultDiv.innerHTML = `<p>An error occurred. Please try again later.</p>`;
-                    resultDiv.style.display = 'block';
+                    // Perform AJAX request
+                    fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                        method: 'POST',
+                        body: formData,
+                    })
+                        .then((response) => {
+                            if (!response.ok) {
+                                throw new Error('Network response was not ok');
+                            }
+                            return response.json();
+                        })
+                        .then((data) => {
+                            if (data.success) {
+                                resultDiv.innerHTML = `<h3>Your Score: ${data.data.score}/${data.data.total}</h3>`;
+                                resultDiv.style.display = 'block';
+                            } else {
+                                resultDiv.innerHTML = `<p>${data.data.message}</p>`;
+                                resultDiv.style.display = 'block';
+                            }
+                        })
+                        .catch((error) => {
+                            console.error('Error:', error);
+                            resultDiv.innerHTML = `<p>An error occurred. Please try again later.</p>`;
+                            resultDiv.style.display = 'block';
+                        });
                 });
-
-        })
-
+            });
+        });
     </script>
 
     <?php
     return ob_get_clean();
 }
-
-// Register the shortcode
 add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
 
 
 
 
 
+
 function wp_quiz_plugin_handle_ajax() {
-    if (!isset($_POST['quiz_id']) || !is_user_logged_in()) {
-        wp_send_json_error(['message' => 'Invalid request or not logged in.']);
+    if (!isset($_POST['quiz_nonce']) || !wp_verify_nonce($_POST['quiz_nonce'], 'wp_quiz_nonce')) {
+        wp_send_json_error(['message' => 'Invalid nonce.']);
     }
 
     global $wpdb;
     $quiz_id = intval($_POST['quiz_id']);
     $questions_table = $wpdb->prefix . 'quiz_questions';
+    $user_answers_table = $wpdb->prefix . 'quiz_user_answers';
     $answers = $_POST;
 
-    unset($answers['action'], $answers['quiz_id']);
+    unset($answers['action'], $answers['quiz_id'], $answers['quiz_nonce']);
 
     // Fetch all questions for the quiz
     $questions = $wpdb->get_results($wpdb->prepare(
@@ -585,44 +544,55 @@ function wp_quiz_plugin_handle_ajax() {
 
     $score = 0;
     $total = count($questions);
+    $user_id = get_current_user_id(); // Get the current user's ID
 
+    // Loop through each question to evaluate answers and save them
     foreach ($questions as $question) {
         $question_id = $question->id;
         $correct_answer = maybe_unserialize($question->solution);
 
-        if (!isset($answers["question_$question_id"])) {
-            continue; // No answer provided for this question
-        }
+        // Check if the user provided an answer for the current question
+        if (!isset($answers['answers'][$question_id])) {
+            $user_answer = null;
+            $is_correct = false;
+        } else {
+            $user_answer = $answers['answers'][$question_id];
 
-        $user_answer = $answers["question_$question_id"];
+            // Evaluate the answer based on the question type
+            if ($question->question_type === 'single_choice') {
+                $is_correct = ($user_answer === $correct_answer);
+            } elseif ($question->question_type === 'multiple_choice') {
+                $is_correct = (is_array($user_answer) && !array_diff($user_answer, $correct_answer));
+            } else {
+                $is_correct = false; // Unsupported question type
+            }
 
-        // Check answers based on question type
-        if ($question->question_type === 'single_choice') {
-            if ($user_answer === $correct_answer) {
+            // Increment score if the answer is correct
+            if ($is_correct) {
                 $score++;
             }
-        } elseif ($question->question_type === 'multiple_choice') {
-            if (is_array($user_answer) && !array_diff($user_answer, $correct_answer)) {
-                $score++;
-            }
         }
+
+        // Save the user's answer to the database
+        $wpdb->insert(
+            $user_answers_table,
+            [
+                'quiz_id'     => $quiz_id,
+                'user_id'     => $user_id,
+                'question_id' => $question_id,
+                'user_answer' => maybe_serialize($user_answer),
+                'correct'     => $is_correct ? 1 : 0,
+            ],
+            ['%d', '%d', '%d', '%s', '%d']
+        );
     }
 
-    wp_send_json_success(['score' => $score, 'total' => $total]);
+    // Return the quiz result
+    wp_send_json_success([
+        'score' => $score,
+        'total' => $total,
+    ]);
 }
 add_action('wp_ajax_wp_quiz_submit_answers', 'wp_quiz_plugin_handle_ajax');
 
-
-
-function wp_quiz_plugin_enqueue_scripts() {
-    wp_enqueue_script(
-        'wp-quiz-plugin',
-        plugins_url('js/wp-quiz-plugin.js', __FILE__),
-        [],
-        '1.0',
-        true
-    );
-    wp_localize_script('wp-quiz-plugin', 'ajaxurl', admin_url('admin-ajax.php'));
-}
-add_action('wp_enqueue_scripts', 'wp_quiz_plugin_enqueue_scripts');
 
