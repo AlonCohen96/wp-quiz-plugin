@@ -532,6 +532,8 @@ function wp_quiz_plugin_handle_ajax() {
 
     unset($answers['action'], $answers['quiz_id'], $answers['quiz_nonce']);
 
+    $user_id = get_current_user_id();
+
     // Fetch all questions for the quiz
     $questions = $wpdb->get_results($wpdb->prepare(
         "SELECT id, question_type, solution FROM $questions_table WHERE quiz_id = %d",
@@ -544,9 +546,15 @@ function wp_quiz_plugin_handle_ajax() {
 
     $score = 0;
     $total = count($questions);
-    $user_id = get_current_user_id(); // Get the current user's ID
 
-    // Loop through each question to evaluate answers and save them
+    // Check if the user has already submitted answers for this quiz
+    $already_submitted = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM $user_answers_table WHERE quiz_id = %d AND user_id = %d",
+        $quiz_id,
+        $user_id
+    ));
+
+    // Loop through each question to evaluate answers
     foreach ($questions as $question) {
         $question_id = $question->id;
         $correct_answer = maybe_unserialize($question->solution);
@@ -573,18 +581,21 @@ function wp_quiz_plugin_handle_ajax() {
             }
         }
 
-        // Save the user's answer to the database
-        $wpdb->insert(
-            $user_answers_table,
-            [
-                'quiz_id'     => $quiz_id,
-                'user_id'     => $user_id,
-                'question_id' => $question_id,
-                'user_answer' => maybe_serialize($user_answer),
-                'correct'     => $is_correct ? 1 : 0,
-            ],
-            ['%d', '%d', '%d', '%s', '%d']
-        );
+        // Only save answers to the database if it's the first submission
+        if ($already_submitted === 0) {
+            error_log('GOT HERE');
+            $wpdb->insert(
+                $user_answers_table,
+                [
+                    'quiz_id'     => $quiz_id,
+                    'user_id'     => $user_id,
+                    'question_id' => $question_id,
+                    'user_answer' => maybe_serialize($user_answer),
+                    'correct'     => $is_correct ? 1 : 0,
+                ],
+                ['%d', '%d', '%d', '%s', '%d']
+            );
+        }
     }
 
     // Return the quiz result
