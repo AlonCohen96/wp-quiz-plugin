@@ -570,7 +570,11 @@ function wp_quiz_plugin_handle_ajax() {
             if ($question->question_type === 'single_choice') {
                 $is_correct = ($user_answer === $correct_answer);
             } elseif ($question->question_type === 'multiple_choice') {
-                $is_correct = (is_array($user_answer) && !array_diff($user_answer, $correct_answer));
+                $is_correct = (
+                    is_array($user_answer) &&
+                    empty(array_diff($user_answer, $correct_answer)) && // User's answers must all be correct
+                    empty(array_diff($correct_answer, $user_answer))   // All correct answers must be selected
+                );
             } else {
                 $is_correct = false; // Unsupported question type
             }
