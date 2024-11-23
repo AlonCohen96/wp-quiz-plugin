@@ -436,8 +436,8 @@ function wp_quiz_plugin_display_quiz($atts) {
         <p><?php echo esc_html($quiz->description); ?></p>
         <form method="post" action="" class="wp-quiz-form" data-result-id="<?php echo esc_attr($result_div_id); ?>">
             <?php foreach ($questions as $index => $question): ?>
-                <div class="quiz-question">
-                    <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
+                <div class="quiz-question" data-question-id="<?php echo esc_attr($question->id); ?>">
+                <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
                     <?php
                     $options = maybe_unserialize($question->options);
                     if ($question->question_type === 'single_choice'):
@@ -494,6 +494,56 @@ function wp_quiz_plugin_display_quiz($atts) {
                             if (data.success) {
                                 resultDiv.innerHTML = `<h3>Your Score: ${data.data.score}/${data.data.total}</h3>`;
                                 resultDiv.style.display = 'block';
+
+                                // Display feedback for each question
+                                const feedback = data.data.feedback;
+                                feedback.forEach((item) => {
+                                    const questionElement = document.querySelector(`[data-question-id="${item.question_id}"]`);
+                                    if (questionElement) {
+                                        const userAnswers = Array.isArray(item.user_answer) ? item.user_answer : [item.user_answer];
+                                        const correctAnswers = Array.isArray(item.correct_answer) ? item.correct_answer : [item.correct_answer];
+
+                                        questionElement.querySelectorAll('input').forEach((input) => {
+                                            const label = input.closest('label');
+
+                                            // Clear previous feedback icons (if any)
+                                            const oldIcons = label.querySelectorAll('.feedback-icon, .correct-icon');
+                                            oldIcons.forEach(icon => icon.remove());
+
+                                            const value = input.value;
+
+                                            // Preserve user's selection
+                                            if (userAnswers.includes(value)) {
+                                                input.checked = true;
+
+                                                // Mark user-selected answers as correct/incorrect
+                                                if (correctAnswers.includes(value)) {
+                                                    const correctIcon = document.createElement('span');
+                                                    correctIcon.textContent = ' ✅';
+                                                    correctIcon.classList.add('feedback-icon');
+                                                    label.appendChild(correctIcon);
+                                                } else {
+                                                    const incorrectIcon = document.createElement('span');
+                                                    incorrectIcon.textContent = ' ❌';
+                                                    incorrectIcon.classList.add('feedback-icon');
+                                                    label.appendChild(incorrectIcon);
+                                                }
+                                            }
+
+                                            // Highlight correct answers if not selected
+                                            if (correctAnswers.includes(value) && !userAnswers.includes(value)) {
+                                                const correctIcon = document.createElement('span');
+                                                correctIcon.textContent = ' ☑';
+                                                correctIcon.classList.add('correct-icon');
+                                                label.appendChild(correctIcon);
+                                            }
+                                        });
+                                    }
+                                });
+
+
+
+
                             } else {
                                 resultDiv.innerHTML = `<p>${data.data.message}</p>`;
                                 resultDiv.style.display = 'block';
@@ -536,7 +586,7 @@ function wp_quiz_plugin_handle_ajax() {
 
     // Fetch all questions for the quiz
     $questions = $wpdb->get_results($wpdb->prepare(
-        "SELECT id, question_type, solution FROM $questions_table WHERE quiz_id = %d",
+        "SELECT id, question_type, solution, question_text FROM $questions_table WHERE quiz_id = %d",
         $quiz_id
     ));
 
@@ -546,6 +596,7 @@ function wp_quiz_plugin_handle_ajax() {
 
     $score = 0;
     $total = count($questions);
+    $feedback = []; // Store feedback for each question
 
     // Check if the user has already submitted answers for this quiz
     $already_submitted = (int) $wpdb->get_var($wpdb->prepare(
@@ -558,36 +609,36 @@ function wp_quiz_plugin_handle_ajax() {
     foreach ($questions as $question) {
         $question_id = $question->id;
         $correct_answer = maybe_unserialize($question->solution);
+        $user_answer = $answers['answers'][$question_id] ?? null;
+        $is_correct = false;
 
-        // Check if the user provided an answer for the current question
-        if (!isset($answers['answers'][$question_id])) {
-            $user_answer = null;
-            $is_correct = false;
-        } else {
-            $user_answer = $answers['answers'][$question_id];
-
-            // Evaluate the answer based on the question type
-            if ($question->question_type === 'single_choice') {
-                $is_correct = ($user_answer === $correct_answer);
-            } elseif ($question->question_type === 'multiple_choice') {
-                $is_correct = (
-                    is_array($user_answer) &&
-                    empty(array_diff($user_answer, $correct_answer)) && // User's answers must all be correct
-                    empty(array_diff($correct_answer, $user_answer))   // All correct answers must be selected
-                );
-            } else {
-                $is_correct = false; // Unsupported question type
-            }
-
-            // Increment score if the answer is correct
-            if ($is_correct) {
-                $score++;
-            }
+        // Evaluate the answer based on the question type
+        if ($question->question_type === 'single_choice') {
+            $is_correct = ($user_answer === $correct_answer);
+        } elseif ($question->question_type === 'multiple_choice') {
+            $is_correct = (
+                is_array($user_answer) &&
+                empty(array_diff($user_answer, $correct_answer)) &&
+                empty(array_diff($correct_answer, $user_answer))
+            );
         }
+
+        // Increment score if the answer is correct
+        if ($is_correct) {
+            $score++;
+        }
+
+        // Feedback for each question
+        $feedback[] = [
+            'question_id' => $question_id,
+            'question_text' => $question->question_text,
+            'user_answer' => $user_answer,
+            'correct_answer' => $correct_answer,
+            'is_correct' => $is_correct,
+        ];
 
         // Only save answers to the database if it's the first submission
         if ($already_submitted === 0) {
-            error_log('GOT HERE');
             $wpdb->insert(
                 $user_answers_table,
                 [
@@ -602,10 +653,11 @@ function wp_quiz_plugin_handle_ajax() {
         }
     }
 
-    // Return the quiz result
+    // Return the quiz result with feedback
     wp_send_json_success([
         'score' => $score,
         'total' => $total,
+        'feedback' => $feedback, // Add feedback data
     ]);
 }
 add_action('wp_ajax_wp_quiz_submit_answers', 'wp_quiz_plugin_handle_ajax');
