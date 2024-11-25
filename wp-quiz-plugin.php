@@ -437,7 +437,7 @@ function wp_quiz_plugin_display_quiz($atts) {
         <form method="post" action="" class="wp-quiz-form" data-result-id="<?php echo esc_attr($result_div_id); ?>">
             <?php foreach ($questions as $index => $question): ?>
                 <div class="quiz-question" data-question-id="<?php echo esc_attr($question->id); ?>">
-                <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
+                    <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
                     <?php
                     $options = maybe_unserialize($question->options);
                     if ($question->question_type === 'single_choice'):
@@ -461,7 +461,20 @@ function wp_quiz_plugin_display_quiz($atts) {
             <?php wp_nonce_field('wp_quiz_nonce', 'quiz_nonce'); ?>
             <button type="submit" class="quiz-submit-button button">Submit Quiz</button>
         </form>
-        <div id="<?php echo esc_attr($result_div_id); ?>" class="quiz-result" style="display:none;"></div>
+        <div
+                id="<?php echo esc_attr($result_div_id); ?>"
+                class="quiz-result"
+                style="display:none;"
+        >
+        </div>
+        <button
+                type="button"
+                class="retake-button"
+                id="<?php echo esc_attr($result_div_id); ?>_retake"
+                style="display:none;"
+        >
+            Retake Quiz
+        </button>
     </div>
 
     <script>
@@ -470,6 +483,7 @@ function wp_quiz_plugin_display_quiz($atts) {
             forms.forEach((form) => {
                 const resultDivId = form.getAttribute('data-result-id');
                 const resultDiv = document.getElementById(resultDivId);
+                const retakeButton = document.getElementById(`${resultDivId}_retake`);
 
                 form.addEventListener('submit', function (event) {
                     event.preventDefault();
@@ -492,8 +506,12 @@ function wp_quiz_plugin_display_quiz($atts) {
                         })
                         .then((data) => {
                             if (data.success) {
-                                resultDiv.innerHTML = `<h3>Your Score: ${data.data.score}/${data.data.total}</h3>`;
+                                const scoreHeading = document.createElement('h3');
+                                scoreHeading.textContent = `Your Score: ${data.data.score}/${data.data.total}`;
+                                resultDiv.innerHTML = ''; // Clear previous content
+                                resultDiv.appendChild(scoreHeading);
                                 resultDiv.style.display = 'block';
+                                retakeButton.style.display = 'inline-block';
 
                                 // Display feedback for each question
                                 const feedback = data.data.feedback;
@@ -540,10 +558,6 @@ function wp_quiz_plugin_display_quiz($atts) {
                                         });
                                     }
                                 });
-
-
-
-
                             } else {
                                 resultDiv.innerHTML = `<p>${data.data.message}</p>`;
                                 resultDiv.style.display = 'block';
@@ -555,6 +569,23 @@ function wp_quiz_plugin_display_quiz($atts) {
                             resultDiv.style.display = 'block';
                         });
                 });
+
+                // Add functionality for retake button
+                retakeButton.addEventListener('click', () => {
+                    // Uncheck all inputs
+                    form.querySelectorAll('input').forEach(input => {
+                        input.checked = false;
+                    });
+
+                    // Remove feedback icons
+                    form.querySelectorAll('.feedback-icon, .correct-icon').forEach(icon => {
+                        icon.remove();
+                    });
+
+                    // Hide result div and retake button
+                    resultDiv.style.display = 'none';
+                    retakeButton.style.display = 'none';
+                });
             });
         });
     </script>
@@ -563,6 +594,7 @@ function wp_quiz_plugin_display_quiz($atts) {
     return ob_get_clean();
 }
 add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
+
 
 
 
