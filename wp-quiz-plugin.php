@@ -6,6 +6,8 @@ Version: 1.0
 Author: Alon Cohen
 */
 
+require_once WP_CONTENT_DIR . '/wp-shared-utils/functions-xp.php';
+
 /* ++++++++++++++++++++++++++++++++++++++++++++++ Plugin Activation ++++++++++++++++++++++++++++++++++++++++++++++ */
 register_activation_hook(__FILE__, 'wp_quiz_plugin_create_tables');
 
@@ -678,6 +680,11 @@ function wp_quiz_plugin_handle_ajax() {
                 ['%d', '%d', '%d', '%s', '%d']
             );
         }
+    }
+
+    // Only reward XP if it's the first submission
+    if ($already_submitted === 0) {
+        add_xp($user_id, 200);
     }
 
     // Return the quiz result with feedback
