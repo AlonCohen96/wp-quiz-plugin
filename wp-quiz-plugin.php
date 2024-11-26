@@ -6,7 +6,11 @@ Version: 1.0
 Author: Alon Cohen
 */
 
-// Function to create the database tables
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Plugin Activation ++++++++++++++++++++++++++++++++++++++++++++++ */
+register_activation_hook(__FILE__, 'wp_quiz_plugin_create_tables');
+
+
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Table Creation ++++++++++++++++++++++++++++++++++++++++++++++ */
 function wp_quiz_plugin_create_tables() {
     global $wpdb;
 
@@ -58,13 +62,12 @@ function wp_quiz_plugin_create_tables() {
     dbDelta($quiz_user_answers_sql);
 }
 
-// Hook into the plugin activation event
-register_activation_hook(__FILE__, 'wp_quiz_plugin_create_tables');
 
 
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Admin Dashboard Setup ++++++++++++++++++++++++++++++++++++++++++++++ */
 
-
-
+// Add a menu item in the WordPress admin dashboard
+add_action('admin_menu', 'wp_quiz_plugin_admin_menu');
 
 function wp_quiz_plugin_admin_menu() {
     add_menu_page(
@@ -112,10 +115,9 @@ function wp_quiz_plugin_admin_menu() {
         'wp_quiz_plugin_add_edit_question_page'
     );
 }
-add_action('admin_menu', 'wp_quiz_plugin_admin_menu');
 
 
-
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Main page for managing Quizzes ++++++++++++++++++++++++++++++++++++++++++++++ */
 function wp_quiz_plugin_main_page() {
     global $wpdb;
     $quizzes_table = $wpdb->prefix . 'quizzes';
@@ -168,9 +170,7 @@ function wp_quiz_plugin_main_page() {
 
 
 
-
-
-
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Page to add a new Quiz or edit an existing Quiz ++++++++++++++++++++++++++++++++++++++++++++++ */
 function wp_quiz_plugin_add_quiz_page() {
     global $wpdb;
     $quizzes_table = $wpdb->prefix . 'quizzes';
@@ -221,7 +221,7 @@ function wp_quiz_plugin_add_quiz_page() {
 
 
 
-
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Page to manage questions of a Quiz ++++++++++++++++++++++++++++++++++++++++++++++ */
 function wp_quiz_plugin_manage_questions_page() {
     global $wpdb;
 
@@ -287,9 +287,7 @@ function wp_quiz_plugin_manage_questions_page() {
 
 
 
-
-
-
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Page to add or edit a Question ++++++++++++++++++++++++++++++++++++++++++++++ */
 function wp_quiz_plugin_add_edit_question_page() {
     global $wpdb;
 
@@ -393,10 +391,9 @@ function wp_quiz_plugin_add_edit_question_page() {
 }
 
 
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Shortcode function to display the Quiz ++++++++++++++++++++++++++++++++++++++++++++++ */
+add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
 
-
-
-// Shortcode to display the quiz
 function wp_quiz_plugin_display_quiz($atts) {
     global $wpdb;
 
@@ -593,13 +590,11 @@ function wp_quiz_plugin_display_quiz($atts) {
     <?php
     return ob_get_clean();
 }
-add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
 
 
 
-
-
-
+/* ++++++++++++++++++++++++++++++++++++++++++++++ Handle Quiz submission ++++++++++++++++++++++++++++++++++++++++++++++ */
+add_action('wp_ajax_wp_quiz_submit_answers', 'wp_quiz_plugin_handle_ajax');
 
 function wp_quiz_plugin_handle_ajax() {
     if (!isset($_POST['quiz_nonce']) || !wp_verify_nonce($_POST['quiz_nonce'], 'wp_quiz_nonce')) {
@@ -692,6 +687,6 @@ function wp_quiz_plugin_handle_ajax() {
         'feedback' => $feedback, // Add feedback data
     ]);
 }
-add_action('wp_ajax_wp_quiz_submit_answers', 'wp_quiz_plugin_handle_ajax');
+
 
 
