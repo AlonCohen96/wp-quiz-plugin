@@ -395,21 +395,18 @@ function wp_quiz_plugin_add_edit_question_page() {
 
 /* ++++++++++++++++++++++++++++++++++++++++++++++ Shortcode function to display the Quiz ++++++++++++++++++++++++++++++++++++++++++++++ */
 add_shortcode('wp_quiz', 'wp_quiz_plugin_display_quiz');
-
 function wp_quiz_plugin_display_quiz($atts) {
     global $wpdb;
 
     // Extract shortcode attributes
-    $atts = shortcode_atts(array(
-        'id' => 0, // Default quiz ID
-    ), $atts);
-
+    $atts = shortcode_atts(['id' => 0], $atts);
     $quiz_id = intval($atts['id']);
+
     if (!$quiz_id) {
         return "<p>No quiz specified. Please provide a quiz ID.</p>";
     }
 
-    // Fetch the quiz data
+    // Fetch quiz data
     $quizzes_table = $wpdb->prefix . 'quizzes';
     $quiz_questions_table = $wpdb->prefix . 'quiz_questions';
 
@@ -418,35 +415,36 @@ function wp_quiz_plugin_display_quiz($atts) {
         return "<p>Quiz not found.</p>";
     }
 
-    // Fetch questions for the quiz
+    // Fetch quiz questions
     $questions = $wpdb->get_results($wpdb->prepare("SELECT * FROM $quiz_questions_table WHERE quiz_id = %d", $quiz_id));
     if (empty($questions)) {
         return "<p>This quiz has no questions yet.</p>";
     }
 
-    // Generate a unique result container ID
-    $result_div_id = 'quiz_result_' . $quiz_id;
+    // Generate unique identifiers for this quiz instance
+    $quiz_wrapper_id = "quiz_wrapper_" . $quiz_id;
+    $result_div_id = "quiz_result_" . $quiz_id;
+    $retake_button_id = "retake_quiz_" . $quiz_id;
 
-    // Start output buffering for dynamic rendering
+    // Start output buffering
     ob_start();
     ?>
-    <div class="wp-quiz-container">
+
+    <div id="<?php echo esc_attr($quiz_wrapper_id); ?>" class="quiz-wrapper">
         <h2><?php echo esc_html($quiz->title); ?></h2>
         <p><?php echo esc_html($quiz->description); ?></p>
-        <form method="post" action="" class="wp-quiz-form" data-result-id="<?php echo esc_attr($result_div_id); ?>">
+        <form class="quiz-form" data-quiz-id="<?php echo esc_attr($quiz_id); ?>">
             <?php foreach ($questions as $index => $question): ?>
                 <div class="quiz-question" data-question-id="<?php echo esc_attr($question->id); ?>">
                     <h3><?php echo esc_html(($index + 1) . '. ' . $question->question_text); ?></h3>
-                    <?php
-                    $options = maybe_unserialize($question->options);
-                    if ($question->question_type === 'single_choice'):
-                        ?>
+                    <?php $options = maybe_unserialize($question->options); ?>
+                    <?php if ($question->question_type === 'single_choice'): ?>
                         <?php foreach ($options as $option): ?>
-                        <label>
-                            <input type="radio" name="answers[<?php echo $question->id; ?>]" value="<?php echo esc_attr($option); ?>" required>
-                            <?php echo esc_html($option); ?>
-                        </label><br>
-                    <?php endforeach; ?>
+                            <label>
+                                <input type="radio" name="answers[<?php echo $question->id; ?>]" value="<?php echo esc_attr($option); ?>" required>
+                                <?php echo esc_html($option); ?>
+                            </label><br>
+                        <?php endforeach; ?>
                     <?php elseif ($question->question_type === 'multiple_choice'): ?>
                         <?php foreach ($options as $option): ?>
                             <label>
@@ -457,134 +455,99 @@ function wp_quiz_plugin_display_quiz($atts) {
                     <?php endif; ?>
                 </div>
             <?php endforeach; ?>
+
             <?php wp_nonce_field('wp_quiz_nonce', 'quiz_nonce'); ?>
             <button type="submit" class="quiz-submit-button button">Submit Quiz</button>
         </form>
-        <div
-                id="<?php echo esc_attr($result_div_id); ?>"
-                class="quiz-result"
-                style="display:none;"
-        >
-        </div>
-        <button
-                type="button"
-                class="retake-button"
-                id="<?php echo esc_attr($result_div_id); ?>_retake"
-                style="display:none;"
-        >
-            Retake Quiz
-        </button>
+
+        <div id="<?php echo esc_attr($result_div_id); ?>" class="quiz-result" style="display: none;"></div>
+        <button type="button" id="<?php echo esc_attr($retake_button_id); ?>" class="retake-button" style="display: none;">Retake Quiz</button>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-            const forms = document.querySelectorAll('.wp-quiz-form');
-            forms.forEach((form) => {
-                const resultDivId = form.getAttribute('data-result-id');
-                const resultDiv = document.getElementById(resultDivId);
-                const retakeButton = document.getElementById(`${resultDivId}_retake`);
+            const quizWrapper = document.getElementById('<?php echo esc_attr($quiz_wrapper_id); ?>');
+            const form = quizWrapper.querySelector('.quiz-form');
+            const resultDiv = quizWrapper.querySelector('.quiz-result');
+            const retakeButton = quizWrapper.querySelector('.retake-button');
 
-                form.addEventListener('submit', function (event) {
-                    event.preventDefault();
+            // Handle form submission
+            form.addEventListener('submit', function (event) {
+                event.preventDefault();
 
-                    // Collect form data
-                    const formData = new FormData(form);
-                    formData.append('action', 'wp_quiz_submit_answers'); // Add action for AJAX handler
-                    formData.append('quiz_id', '<?php echo $quiz_id; ?>'); // Add quiz ID
+                const formData = new FormData(form);
+                formData.append('action', 'wp_quiz_submit_answers');
+                formData.append('quiz_id', form.getAttribute('data-quiz-id'));
 
-                    // Perform AJAX request
-                    fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
-                        method: 'POST',
-                        body: formData,
+                resultDiv.innerHTML = '';
+                resultDiv.style.display = 'none';
+
+                fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                    method: 'POST',
+                    body: formData,
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error('Failed to fetch');
+                        }
+                        return response.json();
                     })
-                        .then((response) => {
-                            if (!response.ok) {
-                                throw new Error('Network response was not ok');
-                            }
-                            return response.json();
-                        })
-                        .then((data) => {
-                            if (data.success) {
-                                const scoreHeading = document.createElement('h3');
-                                scoreHeading.textContent = `Your Score: ${data.data.score}/${data.data.total}`;
-                                resultDiv.innerHTML = ''; // Clear previous content
-                                resultDiv.appendChild(scoreHeading);
-                                resultDiv.style.display = 'block';
-                                retakeButton.style.display = 'inline-block';
+                    .then(data => {
+                        if (data.success) {
+                            resultDiv.innerHTML = `<h3>Your Score: ${data.data.score}/${data.data.total}</h3>`;
+                            data.data.feedback.forEach(item => {
+                                const questionElement = form.querySelector(`[data-question-id="${item.question_id}"]`);
+                                if (questionElement) {
+                                    const userAnswers = Array.isArray(item.user_answer) ? item.user_answer : [item.user_answer];
+                                    const correctAnswers = Array.isArray(item.correct_answer) ? item.correct_answer : [item.correct_answer];
 
-                                // Display feedback for each question
-                                const feedback = data.data.feedback;
-                                feedback.forEach((item) => {
-                                    const questionElement = document.querySelector(`[data-question-id="${item.question_id}"]`);
-                                    if (questionElement) {
-                                        const userAnswers = Array.isArray(item.user_answer) ? item.user_answer : [item.user_answer];
-                                        const correctAnswers = Array.isArray(item.correct_answer) ? item.correct_answer : [item.correct_answer];
+                                    questionElement.querySelectorAll('input').forEach(input => {
+                                        const label = input.closest('label');
+                                        const value = input.value;
 
-                                        questionElement.querySelectorAll('input').forEach((input) => {
-                                            const label = input.closest('label');
+                                        // Remove old icons
+                                        label.querySelectorAll('.feedback-icon, .correct-icon').forEach(icon => icon.remove());
 
-                                            // Clear previous feedback icons (if any)
-                                            const oldIcons = label.querySelectorAll('.feedback-icon, .correct-icon');
-                                            oldIcons.forEach(icon => icon.remove());
+                                        // Check user selection
+                                        if (userAnswers.includes(value)) {
+                                            input.checked = true;
+                                            const icon = document.createElement('span');
+                                            icon.textContent = correctAnswers.includes(value) ? ' ✅' : ' ❌';
+                                            icon.classList.add('feedback-icon');
+                                            label.appendChild(icon);
+                                        }
 
-                                            const value = input.value;
+                                        // Highlight correct answers not selected
+                                        if (correctAnswers.includes(value) && !userAnswers.includes(value)) {
+                                            const icon = document.createElement('span');
+                                            icon.textContent = ' ☑';
+                                            icon.classList.add('correct-icon');
+                                            label.appendChild(icon);
+                                        }
+                                    });
+                                }
+                            });
 
-                                            // Preserve user's selection
-                                            if (userAnswers.includes(value)) {
-                                                input.checked = true;
-
-                                                // Mark user-selected answers as correct/incorrect
-                                                if (correctAnswers.includes(value)) {
-                                                    const correctIcon = document.createElement('span');
-                                                    correctIcon.textContent = ' ✅';
-                                                    correctIcon.classList.add('feedback-icon');
-                                                    label.appendChild(correctIcon);
-                                                } else {
-                                                    const incorrectIcon = document.createElement('span');
-                                                    incorrectIcon.textContent = ' ❌';
-                                                    incorrectIcon.classList.add('feedback-icon');
-                                                    label.appendChild(incorrectIcon);
-                                                }
-                                            }
-
-                                            // Highlight correct answers if not selected
-                                            if (correctAnswers.includes(value) && !userAnswers.includes(value)) {
-                                                const correctIcon = document.createElement('span');
-                                                correctIcon.textContent = ' ☑';
-                                                correctIcon.classList.add('correct-icon');
-                                                label.appendChild(correctIcon);
-                                            }
-                                        });
-                                    }
-                                });
-                            } else {
-                                resultDiv.innerHTML = `<p>${data.data.message}</p>`;
-                                resultDiv.style.display = 'block';
-                            }
-                        })
-                        .catch((error) => {
-                            console.error('Error:', error);
-                            resultDiv.innerHTML = `<p>An error occurred. Please try again later.</p>`;
                             resultDiv.style.display = 'block';
-                        });
-                });
-
-                // Add functionality for retake button
-                retakeButton.addEventListener('click', () => {
-                    // Uncheck all inputs
-                    form.querySelectorAll('input').forEach(input => {
-                        input.checked = false;
+                            retakeButton.style.display = 'block';
+                        } else {
+                            resultDiv.innerHTML = `<p>${data.data.message}</p>`;
+                            resultDiv.style.display = 'block';
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        resultDiv.innerHTML = '<p>An error occurred. Please try again later.</p>';
+                        resultDiv.style.display = 'block';
                     });
+            });
 
-                    // Remove feedback icons
-                    form.querySelectorAll('.feedback-icon, .correct-icon').forEach(icon => {
-                        icon.remove();
-                    });
-
-                    // Hide result div and retake button
-                    resultDiv.style.display = 'none';
-                    retakeButton.style.display = 'none';
-                });
+            // Retake quiz functionality
+            retakeButton.addEventListener('click', function () {
+                form.reset(); // Reset form inputs
+                resultDiv.style.display = 'none'; // Hide result div
+                retakeButton.style.display = 'none'; // Hide retake button
+                form.querySelectorAll('.feedback-icon, .correct-icon').forEach(icon => icon.remove()); // Remove feedback icons
             });
         });
     </script>
@@ -592,6 +555,7 @@ function wp_quiz_plugin_display_quiz($atts) {
     <?php
     return ob_get_clean();
 }
+
 
 
 
